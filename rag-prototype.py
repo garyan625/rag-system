@@ -1,5 +1,4 @@
 import os
-from dotenv import load_dotenv
 
 from langchain_community.document_loaders import (
     DirectoryLoader,
@@ -32,14 +31,20 @@ from langchain_classic.chains import (
 # 1. ENVIRONMENT VARIABLES
 # ==========================================
 
+import streamlit as st
+from dotenv import load_dotenv
+
 load_dotenv()
 
-api_key = os.getenv("GEMINI_API_KEY")
+api_key = st.secrets.get(
+    "GEMINI_API_KEY",
+    os.getenv("GEMINI_API_KEY")
+)
 
 if not api_key:
-    raise ValueError("GEMINI_API_KEY not found in .env")
-
-os.environ["GOOGLE_API_KEY"] = api_key
+    raise ValueError(
+        "GEMINI_API_KEY not found in Streamlit Secrets or .env"
+    )
 
 # ==========================================
 # 2. LOAD DOCUMENTS
