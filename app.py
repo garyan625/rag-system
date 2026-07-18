@@ -31,9 +31,9 @@ def load_chain():
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
-
+os.makedirs("documents", exist_ok=True)
 if "qa_chain" not in st.session_state:
-    st.session_state.qa_chain = load_chain()
+    st.session_state.qa_chain = None
 
 # ==========================================
 # TITLE
@@ -46,7 +46,7 @@ st.markdown("Upload PDFs and ask questions about them.")
 # DOCUMENT DIRECTORY
 # ==========================================
 
-os.makedirs("documents", exist_ok=True)
+
 
 # ==========================================
 # PDF UPLOAD
