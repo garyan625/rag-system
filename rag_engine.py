@@ -1,9 +1,17 @@
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from dotenv import load_dotenv
 import os
+import streamlit as st
+from dotenv import load_dotenv
+
 load_dotenv()
-api_key = os.getenv("GEMINI_API_KEY")
-os.environ["GEMINI_API_KEY"] = api_key
+
+try:
+    api_key = st.secrets["GEMINI_API_KEY"]
+except Exception:
+    api_key = os.getenv("GEMINI_API_KEY")
+
+if not api_key:
+    raise ValueError("GEMINI_API_KEY not found")
 from langchain_community.document_loaders import (
     DirectoryLoader,
     PyPDFLoader,
@@ -159,8 +167,8 @@ def create_vector_store():
 
     chunks = splitter.split_documents(docs)
 
-    embeddings = GoogleGenerativeAIEmbeddings(
-        model="sentence-transformers/all-MiniLM-L6-v2"
+    embeddings = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-MiniLM-L6-v2"
     )
 
     vector_store = FAISS.from_documents(
