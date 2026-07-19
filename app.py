@@ -2,8 +2,13 @@ import os
 import shutil
 import streamlit as st
 
+from rag_engine import (
+    get_qa_chain,
+    create_vector_store
+)
+
 # ==========================================
-# PAGE CONFIG (MUST BE FIRST STREAMLIT CALL)
+# PAGE CONFIG
 # ==========================================
 
 st.set_page_config(
@@ -12,28 +17,21 @@ st.set_page_config(
     layout="wide"
 )
 
-from rag_engine import (
-    get_qa_chain,
-    create_vector_store
-)
-
-# ==========================================
-# CACHE QA CHAIN
-# ==========================================
-
-@st.cache_resource
-def load_chain():
-    return get_qa_chain()
-
 # ==========================================
 # SESSION STATE
 # ==========================================
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
-os.makedirs("documents", exist_ok=True)
+
 if "qa_chain" not in st.session_state:
     st.session_state.qa_chain = None
+
+# ==========================================
+# CREATE DOCUMENT DIRECTORY
+# ==========================================
+
+os.makedirs("documents", exist_ok=True)
 
 # ==========================================
 # TITLE
@@ -43,17 +41,11 @@ st.title("📚 PDF Chat Assistant")
 st.markdown("Upload PDFs and ask questions about them.")
 
 # ==========================================
-# DOCUMENT DIRECTORY
-# ==========================================
-
-
-
-# ==========================================
-# PDF UPLOAD
+# FILE UPLOAD
 # ==========================================
 
 uploaded_files = st.file_uploader(
-    "Upload PDF files",
+    "Upload PDF Files",
     type=["pdf"],
     accept_multiple_files=True
 )
@@ -69,22 +61,14 @@ if uploaded_files:
             uploaded_file.name
         )
 
-        if not os.path.exists(file_path):
+        with open(file_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
 
-            with open(file_path, "wb") as f:
-                f.write(uploaded_file.getbuffer())
+        uploaded_count += 1
 
-            uploaded_count += 1
-
-        else:
-            st.warning(
-                f"{uploaded_file.name} already exists."
-            )
-
-    if uploaded_count > 0:
-        st.success(
-            f"{uploaded_count} PDF(s) uploaded successfully!"
-        )
+    st.success(
+        f"{uploaded_count} PDF(s) uploaded successfully!"
+    )
 
 # ==========================================
 # PROCESS DOCUMENTS
@@ -94,26 +78,43 @@ if st.button("Process Documents"):
 
     try:
 
+        pdf_files = [
+            f for f in os.listdir("documents")
+            if f.endswith(".pdf")
+        ]
+
+        if len(pdf_files) == 0:
+            st.warning(
+                "Please upload at least one PDF."
+            )
+            st.stop()
+
         if os.path.exists("faiss_index"):
             shutil.rmtree("faiss_index")
 
         with st.spinner(
-            "Creating embeddings and FAISS index..."
+            "Creating vector database..."
         ):
             create_vector_store()
 
-        load_chain.clear()
+        with st.spinner(
+            "Creating QA chain..."
+        ):
+            st.session_state.qa_chain = get_qa_chain()
 
-        st.session_state.qa_chain = load_chain()
-
-        st.success(
-            "Documents processed successfully!"
-        )
+        if st.session_state.qa_chain is None:
+            st.error(
+                "QA chain creation failed."
+            )
+        else:
+            st.success(
+                "Documents processed successfully!"
+            )
 
     except Exception as e:
 
         st.error(
-            f"Error while processing documents:\n{str(e)}"
+            f"Processing Error:\n\n{str(e)}"
         )
 
 # ==========================================
@@ -140,16 +141,22 @@ with st.sidebar:
             st.write("📄", file)
 
     else:
-        st.info("No PDFs uploaded yet.")
+        st.info(
+            "No PDFs uploaded yet."
+        )
 
 # ==========================================
-# CHAT HISTORY
+# DISPLAY CHAT HISTORY
 # ==========================================
 
 for message in st.session_state.messages:
 
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+    with st.chat_message(
+        message["role"]
+    ):
+        st.markdown(
+            message["content"]
+        )
 
 # ==========================================
 # CHAT INPUT
@@ -173,57 +180,69 @@ if prompt:
 
     try:
 
-        with st.spinner(
-            "Searching documents..."
-        ):
+        if st.session_state.qa_chain is None:
 
-            result = (
-                st.session_state.qa_chain.invoke(
-                    {
-                        "question": prompt
-                    }
-                )
+            final_response = (
+                "⚠️ Please upload PDFs and click "
+                "'Process Documents' first."
             )
 
-        answer = result["answer"]
+        else:
 
-        sources_text = "\n\n### Sources\n"
+            with st.spinner(
+                "Searching documents..."
+            ):
 
-        seen = set()
-
-        for doc in result["source_documents"]:
-
-            source = doc.metadata.get(
-                "source",
-                "Unknown"
-            )
-
-            page = doc.metadata.get(
-                "page",
-                0
-            )
-
-            citation = (
-                f"{os.path.basename(source)} "
-                f"(Page {page + 1})"
-            )
-
-            if citation not in seen:
-
-                seen.add(citation)
-
-                sources_text += (
-                    f"- {citation}\n"
+                result = (
+                    st.session_state.qa_chain.invoke(
+                        {
+                            "question": prompt
+                        }
+                    )
                 )
 
-        final_response = (
-            answer + sources_text
-        )
+            answer = result["answer"]
+
+            sources_text = "\n\n### Sources\n"
+
+            seen = set()
+
+            for doc in result["source_documents"]:
+
+                source = os.path.basename(
+                    doc.metadata.get(
+                        "source",
+                        "Unknown"
+                    )
+                )
+
+                page = (
+                    doc.metadata.get(
+                        "page",
+                        0
+                    ) + 1
+                )
+
+                citation = (
+                    f"{source} (Page {page})"
+                )
+
+                if citation not in seen:
+
+                    seen.add(citation)
+
+                    sources_text += (
+                        f"- {citation}\n"
+                    )
+
+            final_response = (
+                answer + sources_text
+            )
 
     except Exception as e:
 
         final_response = (
-            f"❌ Error while querying documents:\n\n"
+            "❌ Error while querying documents:\n\n"
             f"{str(e)}"
         )
 
