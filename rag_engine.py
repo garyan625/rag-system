@@ -148,11 +148,7 @@ def create_rag_chain():
     return qa_chain
 
 def get_qa_chain():
-    try:
-        return create_rag_chain()
-    except Exception as e:
-        print("QA CHAIN ERROR:", str(e))
-        return None
+    return create_rag_chain()
 
 
 def create_vector_store():
