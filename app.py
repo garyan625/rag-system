@@ -1,7 +1,9 @@
 import os
 import shutil
 import streamlit as st
-
+from auth import auth
+if "user" not in st.session_state:
+    st.session_state.user = None
 from rag_engine import (
     get_qa_chain,
     create_vector_store
@@ -16,6 +18,59 @@ st.set_page_config(
     page_icon="📚",
     layout="wide"
 )
+if st.session_state.user is None:
+
+    st.title("🔐 Login")
+
+    choice = st.selectbox(
+        "Choose",
+        ["Login", "Signup"]
+    )
+
+    email = st.text_input("Email")
+
+    password = st.text_input(
+        "Password",
+        type="password"
+    )
+
+    if choice == "Signup":
+
+        if st.button("Create Account"):
+
+            try:
+                auth.create_user_with_email_and_password(
+                    email,
+                    password
+                )
+
+                st.success(
+                    "Account created!"
+                )
+
+            except Exception as e:
+                st.error(str(e))
+
+    else:
+
+        if st.button("Login"):
+
+            try:
+
+                user = auth.sign_in_with_email_and_password(
+                    email,
+                    password
+                )
+
+                st.session_state.user = user
+                st.rerun()
+
+            except Exception:
+                st.error(
+                    "Invalid credentials"
+                )
+
+    st.stop()
 
 # ==========================================
 # SESSION STATE
@@ -31,7 +86,17 @@ if "qa_chain" not in st.session_state:
 # CREATE DOCUMENT DIRECTORY
 # ==========================================
 
-os.makedirs("documents", exist_ok=True)
+user_email = (
+    st.session_state.user["email"]
+    .replace("@", "_")
+    .replace(".", "_")
+)
+
+DOCUMENT_DIR = f"documents/{user_email}"
+INDEX_DIR = f"faiss_indexes/{user_email}"
+
+os.makedirs(DOCUMENT_DIR, exist_ok=True)
+os.makedirs("faiss_indexes", exist_ok=True)
 
 # ==========================================
 # TITLE
@@ -57,8 +122,8 @@ if uploaded_files:
     for uploaded_file in uploaded_files:
 
         file_path = os.path.join(
-            "documents",
-            uploaded_file.name
+        DOCUMENT_DIR,
+        uploaded_file.name
         )
 
         with open(file_path, "wb") as f:
@@ -95,12 +160,18 @@ if st.button("Process Documents"):
         with st.spinner(
             "Creating vector database..."
         ):
-            create_vector_store()
+            create_vector_store(
+                document_path=DOCUMENT_DIR,
+                index_path=INDEX_DIR
+            )
 
         with st.spinner(
             "Creating QA chain..."
         ):
-            st.session_state.qa_chain = get_qa_chain()
+            st.session_state.qa_chain = get_qa_chain(
+                document_path=DOCUMENT_DIR,
+                index_path=INDEX_DIR
+            )
 
         if st.session_state.qa_chain is None:
             st.error(
@@ -126,7 +197,7 @@ with st.sidebar:
     st.header("📄 Uploaded Documents")
 
     pdf_files = [
-        f for f in os.listdir("documents")
+        f for f in os.listdir(DOCUMENT_DIR)
         if f.endswith(".pdf")
     ]
 
@@ -255,3 +326,15 @@ if prompt:
             "content": final_response
         }
     )
+with st.sidebar:
+
+    st.success(
+        f"Logged in as {st.session_state.user['email']}"
+    )
+
+    if st.button("Logout"):
+
+        st.session_state.user = None
+        st.session_state.qa_chain = None
+        st.session_state.messages = []
+        st.rerun()
