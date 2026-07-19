@@ -8,6 +8,7 @@ langchain-text-splitters
 langchain-huggingface
 sentence-transformers
 faiss-cpu
-
+firebase-admin
+streamlit-authenticator
 pypdf
 python-dotenv
