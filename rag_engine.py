@@ -1,17 +1,7 @@
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
 import os
 import streamlit as st
 from dotenv import load_dotenv
 
-load_dotenv()
-
-try:
-    api_key = st.secrets["GEMINI_API_KEY"]
-except Exception:
-    api_key = os.getenv("GEMINI_API_KEY")
-
-if not api_key:
-    raise ValueError("GEMINI_API_KEY not found")
 from langchain_community.document_loaders import (
     DirectoryLoader,
     PyPDFLoader,
@@ -21,8 +11,8 @@ from langchain_text_splitters import (
     RecursiveCharacterTextSplitter,
 )
 
-from langchain_google_genai import (
-    ChatGoogleGenerativeAI,
+from langchain_groq import (
+    ChatGroq,
 )
 
 from langchain_huggingface import (
@@ -40,85 +30,62 @@ from langchain_classic.memory import (
 from langchain_classic.chains import (
     ConversationalRetrievalChain,
 )
-def create_rag_chain():
+
+load_dotenv()
+
+try:
+    api_key = st.secrets["GEMINI_API_KEY"]
+except Exception:
+    api_key = os.getenv("GEMINI_API_KEY")
+
+if not api_key:
+    raise ValueError("GEMINI_API_KEY not found")
+
+
+# ==========================================
+# CREATE RAG CHAIN
+# ==========================================
+
+def create_rag_chain(document_path, index_path):
+
     print("\nLoading documents...")
-
-    loader = DirectoryLoader(
-        "documents",
-        glob="*.pdf",
-        loader_cls=PyPDFLoader
-    )
-
-    documents = loader.load()
-
-    print(f"Loaded {len(documents)} pages")
-
-    # ==========================================
-    # 3. CHUNK DOCUMENTS
-    # ==========================================
-
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200
-    )
-
-    chunks = splitter.split_documents(documents)
-
-    print(f"Created {len(chunks)} chunks")
-
-    # ==========================================
-    # 4. EMBEDDING MODEL
-    # ==========================================
-
-    print("\nLoading embedding model...")
 
     embeddings = HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2"
     )
 
     # ==========================================
-    # 5. CREATE / LOAD FAISS
+    # LOAD EXISTING FAISS INDEX
     # ==========================================
 
-    INDEX_PATH = "faiss_index"
+    if os.path.exists(index_path):
 
-    if os.path.exists(INDEX_PATH):
-
-        print("Loading existing FAISS index...")
+        print("Loading FAISS index...")
 
         vectorstore = FAISS.load_local(
-            INDEX_PATH,
+            index_path,
             embeddings,
             allow_dangerous_deserialization=True
         )
 
     else:
 
-        print("Creating FAISS index...")
+        print("FAISS index not found.")
 
-        vectorstore = FAISS.from_documents(
-            chunks,
-            embeddings
-        )
-
-        vectorstore.save_local(INDEX_PATH)
-
-        print("FAISS index saved")
+        return None
 
     # ==========================================
-    # 6. GEMINI MODEL
+    # GEMINI MODEL
     # ==========================================
 
-    print("\nUsing Gemini 2.5 Flash")
-
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
-        google_api_key=api_key,
+    llm = ChatGroq(
+        groq_api_key=os.getenv("GROQ_API_KEY"),
+        model_name="llama-3.3-70b-versatile",
         temperature=0
     )
 
     # ==========================================
-    # 7. MEMORY
+    # MEMORY
     # ==========================================
 
     memory = ConversationBufferMemory(
@@ -128,7 +95,7 @@ def create_rag_chain():
     )
 
     # ==========================================
-    # 8. RETRIEVER
+    # RETRIEVER
     # ==========================================
 
     retriever = vectorstore.as_retriever(
@@ -136,7 +103,7 @@ def create_rag_chain():
     )
 
     # ==========================================
-    # 9. CONVERSATIONAL RAG CHAIN
+    # QA CHAIN
     # ==========================================
 
     qa_chain = ConversationalRetrievalChain.from_llm(
@@ -145,27 +112,67 @@ def create_rag_chain():
         memory=memory,
         return_source_documents=True
     )
+
     return qa_chain
 
-def get_qa_chain():
-    return create_rag_chain()
+
+# ==========================================
+# GET QA CHAIN
+# ==========================================
+
+def get_qa_chain(document_path, index_path):
+
+    try:
+        return create_rag_chain(
+            document_path,
+            index_path
+        )
+
+    except Exception as e:
+
+        print(
+            "QA CHAIN ERROR:",
+            str(e)
+        )
+
+        return None
 
 
-def create_vector_store():
+# ==========================================
+# CREATE VECTOR STORE
+# ==========================================
+
+def create_vector_store(document_path, index_path):
+
     loader = DirectoryLoader(
-        "documents",
+        document_path,
         glob="*.pdf",
         loader_cls=PyPDFLoader
     )
 
     docs = loader.load()
 
+    if len(docs) == 0:
+        raise Exception(
+            "No PDF documents found."
+        )
+
+    print(
+        f"Loaded {len(docs)} pages"
+    )
+
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000,
         chunk_overlap=200
     )
 
-    chunks = splitter.split_documents(docs)
+    chunks = splitter.split_documents(
+        docs
+    )
+
+    print(
+        f"Created {len(chunks)} chunks"
+    )
 
     embeddings = HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2"
@@ -176,4 +183,15 @@ def create_vector_store():
         embeddings
     )
 
-    vector_store.save_local("faiss_index")  
+    os.makedirs(
+        os.path.dirname(index_path),
+        exist_ok=True
+    )
+
+    vector_store.save_local(
+        index_path
+    )
+
+    print(
+        f"FAISS saved to {index_path}"
+    )
