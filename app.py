@@ -1,13 +1,25 @@
 import os
 import shutil
+import requests
 import streamlit as st
-from auth import auth
-if "user" not in st.session_state:
-    st.session_state.user = None
+
+from auth import (
+    oauth2,
+    GOOGLE_REDIRECT_URI
+)
+
 from rag_engine import (
     get_qa_chain,
     create_vector_store
 )
+
+from chat_history import (
+    save_message,
+    load_chat_history
+)
+# ==========================================
+# PAGE CONFIG
+# ==========================================
 
 # ==========================================
 # PAGE CONFIG
@@ -18,57 +30,50 @@ st.set_page_config(
     page_icon="📚",
     layout="wide"
 )
+
+if "user" not in st.session_state:
+    st.session_state.user = None
+
+# ==========================================
+# GOOGLE LOGIN
+# ==========================================
+
 if st.session_state.user is None:
 
     st.title("🔐 Login")
 
-    choice = st.selectbox(
-        "Choose",
-        ["Login", "Signup"]
+    result = oauth2.authorize_button(
+        "Continue with Google",
+        GOOGLE_REDIRECT_URI,
+        scope="openid email profile",
+        icon="https://www.google.com.tw/favicon.ico",
+        key="google_oauth",
+        use_container_width=True,
     )
+    st.write("OAuth Result:", result)
 
-    email = st.text_input("Email")
+    if result and "token" in result:
 
-    password = st.text_input(
-        "Password",
-        type="password"
-    )
+        access_token = result["token"]["access_token"]
 
-    if choice == "Signup":
+        userinfo = requests.get(
+            "https://www.googleapis.com/oauth2/v3/userinfo",
+            headers={
+                "Authorization":
+                f"Bearer {access_token}"
+            },
+        ).json()
 
-        if st.button("Create Account"):
+        st.session_state.user = {
+            "email": userinfo["email"],
+            "localId": userinfo["sub"],
+            "displayName": userinfo.get(
+                "name",
+                ""
+            ),
+        }
 
-            try:
-                auth.create_user_with_email_and_password(
-                    email,
-                    password
-                )
-
-                st.success(
-                    "Account created!"
-                )
-
-            except Exception as e:
-                st.error(str(e))
-
-    else:
-
-        if st.button("Login"):
-
-            try:
-
-                user = auth.sign_in_with_email_and_password(
-                    email,
-                    password
-                )
-
-                st.session_state.user = user
-                st.rerun()
-
-            except Exception:
-                st.error(
-                    "Invalid credentials"
-                )
+        st.rerun()
 
     st.stop()
 
@@ -78,12 +83,15 @@ if st.session_state.user is None:
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
+if "history_loaded" not in st.session_state:
+    st.session_state.history_loaded = False
 
 if "qa_chain" not in st.session_state:
     st.session_state.qa_chain = None
 
+
 # ==========================================
-# CREATE DOCUMENT DIRECTORY
+# USER DIRECTORIES
 # ==========================================
 
 user_email = (
@@ -96,21 +104,57 @@ DOCUMENT_DIR = f"documents/{user_email}"
 INDEX_DIR = f"faiss_indexes/{user_email}"
 
 os.makedirs(DOCUMENT_DIR, exist_ok=True)
-os.makedirs("faiss_indexes", exist_ok=True)
+os.makedirs(INDEX_DIR, exist_ok=True)
 
 # ==========================================
-# TITLE
+# LOAD CHAT HISTORY
+# ==========================================
+
+if not st.session_state.history_loaded:
+
+    st.session_state.messages = load_chat_history(
+        st.session_state.user["email"]
+    )
+
+    st.session_state.history_loaded = True
+
+# ==========================================
+# LOAD EXISTING INDEX
+# ==========================================
+
+if (
+    st.session_state.qa_chain is None
+    and os.path.isdir(INDEX_DIR)
+    and len(os.listdir(INDEX_DIR)) > 0
+):
+    try:
+
+        st.session_state.qa_chain = (
+            get_qa_chain(
+                document_path=DOCUMENT_DIR,
+                index_path=INDEX_DIR
+            )
+        )
+
+    except Exception:
+        pass
+
+# ==========================================
+# MAIN UI
 # ==========================================
 
 st.title("📚 PDF Chat Assistant")
-st.markdown("Upload PDFs and ask questions about them.")
+
+st.markdown(
+    f"Welcome **{st.session_state.user['displayName']}**"
+)
 
 # ==========================================
 # FILE UPLOAD
 # ==========================================
 
 uploaded_files = st.file_uploader(
-    "Upload PDF Files",
+    "Upload PDFs",
     type=["pdf"],
     accept_multiple_files=True
 )
@@ -122,18 +166,24 @@ if uploaded_files:
     for uploaded_file in uploaded_files:
 
         file_path = os.path.join(
-        DOCUMENT_DIR,
-        uploaded_file.name
+            DOCUMENT_DIR,
+            uploaded_file.name
         )
 
-        with open(file_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
+        if not os.path.exists(file_path):
 
-        uploaded_count += 1
+            with open(file_path, "wb") as f:
+                f.write(
+                    uploaded_file.getbuffer()
+                )
 
-    st.success(
-        f"{uploaded_count} PDF(s) uploaded successfully!"
-    )
+            uploaded_count += 1
+
+    if uploaded_count > 0:
+
+        st.success(
+            f"{uploaded_count} PDF(s) uploaded"
+        )
 
 # ==========================================
 # PROCESS DOCUMENTS
@@ -144,49 +194,42 @@ if st.button("Process Documents"):
     try:
 
         pdf_files = [
-            f for f in os.listdir("documents")
+            f for f in os.listdir(
+                DOCUMENT_DIR
+            )
             if f.endswith(".pdf")
         ]
 
-        if len(pdf_files) == 0:
+        if not pdf_files:
+
             st.warning(
-                "Please upload at least one PDF."
+                "Upload PDFs first."
             )
-            st.stop()
 
-        if os.path.exists("faiss_index"):
-            shutil.rmtree("faiss_index")
+        else:
 
-        with st.spinner(
-            "Creating vector database..."
-        ):
+            if os.path.exists(INDEX_DIR):
+                shutil.rmtree(INDEX_DIR)
+
             create_vector_store(
                 document_path=DOCUMENT_DIR,
                 index_path=INDEX_DIR
             )
 
-        with st.spinner(
-            "Creating QA chain..."
-        ):
-            st.session_state.qa_chain = get_qa_chain(
-                document_path=DOCUMENT_DIR,
-                index_path=INDEX_DIR
+            st.session_state.qa_chain = (
+                get_qa_chain(
+                    document_path=DOCUMENT_DIR,
+                    index_path=INDEX_DIR
+                )
             )
 
-        if st.session_state.qa_chain is None:
-            st.error(
-                "QA chain creation failed."
-            )
-        else:
             st.success(
-                "Documents processed successfully!"
+                "Documents processed."
             )
 
     except Exception as e:
 
-        st.error(
-            f"Processing Error:\n\n{str(e)}"
-        )
+        st.error(str(e))
 
 # ==========================================
 # SIDEBAR
@@ -194,7 +237,11 @@ if st.button("Process Documents"):
 
 with st.sidebar:
 
-    st.header("📄 Uploaded Documents")
+    st.success(
+        st.session_state.user["email"]
+    )
+
+    st.header("Uploaded PDFs")
 
     pdf_files = [
         f for f in os.listdir(DOCUMENT_DIR)
@@ -206,18 +253,85 @@ with st.sidebar:
         len(pdf_files)
     )
 
-    if pdf_files:
+    for pdf in pdf_files:
 
-        for file in pdf_files:
-            st.write("📄", file)
+        col1, col2 = st.columns([4, 1])
 
-    else:
-        st.info(
-            "No PDFs uploaded yet."
-        )
+        with col1:
+            st.write("📄", pdf)
 
+        with col2:
+
+            if st.button(
+                "❌",
+                key=f"delete_{pdf}"
+            ):
+
+                try:
+
+                    pdf_path = os.path.join(
+                        DOCUMENT_DIR,
+                        pdf
+                    )
+
+                    if os.path.exists(pdf_path):
+                        os.remove(pdf_path)
+
+                    # Remove old index
+                    if os.path.exists(INDEX_DIR):
+                        shutil.rmtree(INDEX_DIR)
+
+                    remaining_pdfs = [
+                        f for f in os.listdir(
+                            DOCUMENT_DIR
+                        )
+                        if f.endswith(".pdf")
+                    ]
+
+                    if remaining_pdfs:
+
+                        create_vector_store(
+                            document_path=DOCUMENT_DIR,
+                            index_path=INDEX_DIR
+                        )
+
+                        st.session_state.qa_chain = (
+                            get_qa_chain(
+                                document_path=DOCUMENT_DIR,
+                                index_path=INDEX_DIR
+                            )
+                        )
+
+                    else:
+
+                        st.session_state.qa_chain = None
+
+                    st.success(
+                        f"{pdf} deleted successfully"
+                    )
+
+                    st.rerun()
+
+                except Exception as e:
+
+                    st.error(
+                        f"Delete failed: {e}"
+                    )
+    if st.button("➕ New Chat"):
+        st.session_state.messages = []
+        st.session_state.history_loaded = True
+        st.rerun()
+
+    if st.button("Logout"):
+
+        st.session_state.user = None
+        st.session_state.messages = []
+        st.session_state.qa_chain = None
+        st.session_state.qa_chain = None
+        st.session_state.history_loaded = False
+        st.rerun()
 # ==========================================
-# DISPLAY CHAT HISTORY
+# CHAT HISTORY
 # ==========================================
 
 for message in st.session_state.messages:
@@ -234,13 +348,10 @@ for message in st.session_state.messages:
 # ==========================================
 
 prompt = st.chat_input(
-    "Ask a question about your PDFs..."
+    "Ask about your PDFs..."
 )
 
 if prompt:
-
-    with st.chat_message("user"):
-        st.markdown(prompt)
 
     st.session_state.messages.append(
         {
@@ -249,36 +360,40 @@ if prompt:
         }
     )
 
+    save_message(
+        st.session_state.user["email"],
+        "user",
+        prompt
+    )
+
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
     try:
 
         if st.session_state.qa_chain is None:
 
             final_response = (
-                "⚠️ Please upload PDFs and click "
-                "'Process Documents' first."
+                "⚠️ Process documents first."
             )
 
         else:
 
-            with st.spinner(
-                "Searching documents..."
-            ):
-
-                result = (
-                    st.session_state.qa_chain.invoke(
-                        {
-                            "question": prompt
-                        }
-                    )
+            result = (
+                st.session_state.qa_chain.invoke(
+                    {
+                        "question": prompt
+                    }
                 )
+            )
 
             answer = result["answer"]
 
-            sources_text = "\n\n### Sources\n"
+            sources = []
 
-            seen = set()
-
-            for doc in result["source_documents"]:
+            for doc in result[
+                "source_documents"
+            ]:
 
                 source = os.path.basename(
                     doc.metadata.get(
@@ -294,31 +409,36 @@ if prompt:
                     ) + 1
                 )
 
-                citation = (
+                sources.append(
                     f"{source} (Page {page})"
                 )
 
-                if citation not in seen:
+            sources = list(set(sources))
 
-                    seen.add(citation)
+            final_response = answer
 
-                    sources_text += (
-                        f"- {citation}\n"
+            if sources:
+
+                final_response += (
+                    "\n\n### Sources\n"
+                )
+
+                for src in sources:
+
+                    final_response += (
+                        f"- {src}\n"
                     )
-
-            final_response = (
-                answer + sources_text
-            )
 
     except Exception as e:
 
-        final_response = (
-            "❌ Error while querying documents:\n\n"
-            f"{str(e)}"
-        )
+        final_response = str(e)
 
-    with st.chat_message("assistant"):
-        st.markdown(final_response)
+    with st.chat_message(
+        "assistant"
+    ):
+        st.markdown(
+            final_response
+        )
 
     st.session_state.messages.append(
         {
@@ -326,15 +446,9 @@ if prompt:
             "content": final_response
         }
     )
-with st.sidebar:
 
-    st.success(
-        f"Logged in as {st.session_state.user['email']}"
+    save_message(
+        st.session_state.user["email"],
+        "assistant",
+        final_response
     )
-
-    if st.button("Logout"):
-
-        st.session_state.user = None
-        st.session_state.qa_chain = None
-        st.session_state.messages = []
-        st.rerun()
