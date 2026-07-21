@@ -16,7 +16,7 @@ from streamlit_oauth import OAuth2Component
 if not firebase_admin._apps:
 
     cred = credentials.Certificate(
-        "serviceAccountKey.json"
+        dict(st.secrets["firebase"])
     )
 
     firebase_admin.initialize_app(
