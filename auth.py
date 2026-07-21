@@ -15,15 +15,17 @@ from streamlit_oauth import OAuth2Component
 
 if not firebase_admin._apps:
 
+    firebase_config = dict(st.secrets["firebase"])
+
     cred = credentials.Certificate(
-        dict(st.secrets["firebase"])
+        firebase_config
     )
 
     firebase_admin.initialize_app(
         cred,
         {
             "projectId":
-            st.secrets["FIREBASE_PROJECT_ID"]
+            firebase_config["project_id"]
         }
     )
 
@@ -52,9 +54,8 @@ GOOGLE_CLIENT_SECRET = st.secrets[
 ]
 
 GOOGLE_REDIRECT_URI = (
-    "http://localhost:8501/component/streamlit_oauth.authorize_button"
+    "https://rag-system-2026.streamlit.app/component/streamlit_oauth.authorize_button"
 )
-
 oauth2 = OAuth2Component(
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
