@@ -3,6 +3,8 @@ streamlit-oauth
 firebase-admin
 google-cloud-firestore
 requests
+torch
+torchvision
 python-dotenv
 langchain
 langchain-community
